@@ -154,9 +154,11 @@ def show_fig(fig: go.Figure, key: str) -> None:
 
 
 def goto(page: str, case_id: str | None = None) -> None:
-    st.session_state["nav"] = page
+    """Fragment-safe navigation: write plain pending keys, then full app rerun.
+    main() consumes them BEFORE any widget is instantiated."""
+    st.session_state["_nav_to"] = page
     if case_id:
-        st.session_state["selected_case"] = case_id
+        st.session_state["_case_to"] = case_id
     st.rerun()
 
 
@@ -264,6 +266,8 @@ pre.json { background: var(--bg1); border: 1px solid var(--line); border-radius:
   padding: 14px 16px; height: 100%; }
 .scen h4 { margin: 0 0 5px; font-size: .92rem; }
 .scen p { font-size: .78rem; color: var(--mut); margin: 0 0 8px; }
+[class*="st-key-apv_"] { border: 1px solid var(--line); border-radius: 14px; background: var(--card);
+  padding: 12px 14px; margin: 10px 0; }
 .stButton > button, .stDownloadButton > button { background: var(--card); color: var(--ink); border: 1px solid var(--line);
   border-radius: 10px; font-weight: 600; transition: all .16s ease; }
 .stButton > button:hover, .stDownloadButton > button:hover { border-color: var(--cyn); color: var(--cyn);
@@ -417,10 +421,11 @@ def json_pre(obj: Any) -> None:
 # 5 · PRIVACY & SAFETY UTILITIES  (PII redaction · prompt-injection scanner)
 # ══════════════════════════════════════════════════════════════════════════════
 
+# Order matters: IBAN (spaced groups) must be consumed before the CARD pattern.
 PII_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("EMAIL", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
+    ("IBAN", re.compile(r"\b[A-Z]{2}\d{2}(?:[ -]?[A-Z0-9]){10,30}\b")),
     ("CARD", re.compile(r"\b(?:\d[ -]?){13,16}\b")),
-    ("IBAN", re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b")),
     ("SSN", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
     ("PHONE", re.compile(r"(?:\+\d{1,3}[ -]?)?(?:\(\d{3}\)[ -]?|\d{3}[ -])\d{3}[ -]\d{4}\b")),
 ]
@@ -668,19 +673,26 @@ OUTREACH_SCHEMA = {"required": ["channel", "tone", "subject", "body"], "properti
     "channel": {"type": "string", "enum": CHANNELS}, "tone": {"type": "string", "enum": TONES},
     "subject": {"type": "string"}, "body": {"type": "string"}}}
 
-TEMPLATES = {
+# Every value is a (subject, body) tuple. SMS has an empty subject.
+TEMPLATES: dict[tuple[str, str], tuple[str, str]] = {
     ("email", "friendly"): ("Quick check on invoice {inv}",
         "Hi {contact},\n\nHope things are well at {company}. Invoice {inv} for {amt} is {days} days past due — could you confirm a payment date? If it's already scheduled, just reply 'paid' and we'll close this out.\n\nThanks so much,\nAR Team · {tenant}\nPay securely: pay.meridian-demo.local/{token}"),
     ("email", "formal"): ("Invoice {inv} — payment status request",
         "Dear {contact},\n\nOur records show invoice {inv} ({amt}) is {days} days past due. Please remit payment or confirm a payment date within 5 business days. If you believe this is in error, reply with details and we will investigate promptly.\n\nRegards,\nAccounts Receivable · {tenant}\nPay securely: pay.meridian-demo.local/{token}"),
     ("email", "firm"): ("Final notice — invoice {inv} ({amt})",
         "Dear {contact},\n\nInvoice {inv} for {amt} remains unpaid {days} days after its due date despite prior reminders. To avoid escalation to our recovery process, please remit payment or contact us to arrange a payment plan within 7 days.\n\nAccounts Receivable · {tenant}\nPay securely: pay.meridian-demo.local/{token}"),
-    ("sms", "friendly"): ("", "Hi {contact} — {tenant} here. Invoice {inv} ({amt}) is {days}d past due. Can you confirm a pay date? Reply PAID if sent. Pay: pay.meridian-demo.local/{token}"),
-    ("sms", "formal"): ("", "{tenant}: Invoice {inv} ({amt}) is {days} days overdue. Please remit or confirm a payment date. Questions? Reply here. Pay: pay.meridian-demo.local/{token}"),
-    ("sms", "firm"): ("", "{tenant} final notice: invoice {inv} ({amt}) {days}d overdue. Remit within 7 days or reply to arrange a plan. Pay: pay.meridian-demo.local/{token}"),
-    ("portal", "friendly"): ("Portal notice · {inv}", "Hello {contact} — a friendly reminder that invoice {inv} ({amt}) is {days} days past due. You can pay or propose a date directly in this portal."),
-    ("portal", "formal"): ("Portal notice · {inv}", "Invoice {inv} ({amt}) is {days} days past due. Please remit via the portal or submit a payment date. Disputes can be raised here with supporting documents."),
-    ("portal", "firm"): ("Portal notice · {inv}", "Final notice: invoice {inv} ({amt}) is {days} days past due. Please remit within 7 days or submit a payment-plan request via this portal."),
+    ("sms", "friendly"): ("",
+        "Hi {contact} — {tenant} here. Invoice {inv} ({amt}) is {days}d past due. Can you confirm a pay date? Reply PAID if sent. Pay: pay.meridian-demo.local/{token}"),
+    ("sms", "formal"): ("",
+        "{tenant}: Invoice {inv} ({amt}) is {days} days overdue. Please remit or confirm a payment date. Questions? Reply here. Pay: pay.meridian-demo.local/{token}"),
+    ("sms", "firm"): ("",
+        "{tenant} final notice: invoice {inv} ({amt}) {days}d overdue. Remit within 7 days or reply to arrange a plan. Pay: pay.meridian-demo.local/{token}"),
+    ("portal", "friendly"): ("Portal notice · {inv}",
+        "Hello {contact} — a friendly reminder that invoice {inv} ({amt}) is {days} days past due. You can pay or propose a date directly in this portal."),
+    ("portal", "formal"): ("Portal notice · {inv}",
+        "Invoice {inv} ({amt}) is {days} days past due. Please remit via the portal or submit a payment date. Disputes can be raised here with supporting documents."),
+    ("portal", "firm"): ("Portal notice · {inv}",
+        "Final notice: invoice {inv} ({amt}) is {days} days past due. Please remit within 7 days or submit a payment-plan request via this portal."),
 }
 
 
@@ -758,13 +770,15 @@ class Case:
 
 
 class AuditLedger:
-    """Append-only hash-chained log; mirrored to SQLite for durable evidence."""
+    """Append-only hash-chained log; mirrored to SQLite for durable evidence.
+    Commits are batched (every 20 entries) for fast boots; flush() forces a sync."""
 
     def __init__(self, db_path: str = "ar_demo_audit.db"):
         self.entries: list[dict] = []
         self.prev = "0" * 64
         self.run_id = uuid.uuid4().hex[:12]
         self.db_ok = True
+        self._since_commit = 0
         try:
             self.conn = sqlite3.connect(db_path, check_same_thread=False)
             self.conn.execute("CREATE TABLE IF NOT EXISTS audit(run_id TEXT, seq INTEGER, "
@@ -792,10 +806,21 @@ class AuditLedger:
                 self.conn.execute("INSERT INTO audit VALUES (?,?,?,?,?,?,?,?,?,?)",
                                   (self.run_id, seq, ts, tick, typ, case_id, actor,
                                    json.dumps(payload, default=str), self.prev, h))
-                self.conn.commit()
+                self._since_commit += 1
+                if self._since_commit >= 20:
+                    self.conn.commit()
+                    self._since_commit = 0
             except sqlite3.Error:
                 self.db_ok = False
         return entry
+
+    def flush(self) -> None:
+        if self.db_ok:
+            try:
+                self.conn.commit()
+                self._since_commit = 0
+            except sqlite3.Error:
+                self.db_ok = False
 
     def verify(self, entries: list[dict] | None = None) -> tuple[bool, int]:
         prev = "0" * 64
@@ -820,10 +845,12 @@ class AuditLedger:
         return self.verify(copy)
 
     def export_json(self) -> bytes:
+        self.flush()
         return json.dumps(dict(run_id=self.run_id, entries=self.entries),
                           indent=1, default=str).encode()
 
     def export_csv(self) -> bytes:
+        self.flush()
         rows = [dict(seq=e["seq"], ts=e["ts"], tick=e["tick"], type=e["type"],
                      case_id=e["case_id"], actor=e["actor"], hash=e["hash"][:16],
                      payload=json.dumps(e["payload"], default=str)) for e in self.entries]
@@ -948,8 +975,6 @@ class Engine:
             case.risk = "medium"
         else:
             case.risk = "low"
-        if cust.bankrupt or inv.legal_hold:
-            case.risk = "high"
         case.priority = (inv.amount ** .6) * (1 - case.propensity) * (1 + inv.days_overdue / 60)
 
     # ── audit / feed ────────────────────────────────────────────────────────
@@ -1207,7 +1232,6 @@ class Engine:
         if frac < 1.0:
             case.invoice.amount = round(case.invoice.amount - amt, 2)
             case.partial_frac, case.promise, case.agent_pay_tick = None, None, None
-            case.invoice.broken_promises += 0
             self.feed_add("cash", f"Partial payment {fmt_money(amt, True)} on {case.id} — balance {fmt_money(case.invoice.amount, True)} re-queued", case.id)
             self.orchestrate(case)
         else:
@@ -1230,16 +1254,19 @@ class Engine:
             slots = dict(contact=case.customer.contact, company=case.customer.name, inv=case.id,
                          amt=fmt_money(case.invoice.amount), days=case.invoice.days_overdue,
                          tenant=TENANT, token=sha8(case.id))
+            body = body_t.format(**slots)
+            if case.channel == "sms":
+                body = body[:160]
             case.message = dict(channel=case.channel, tone=case.tone,
                                 subject=subj_t.format(**slots) if case.channel != "sms" else "",
-                                body=body_t.format(**slots))
+                                body=body)
         self.feedback.append(dict(case=case.id, action="edit" if edits else "approve",
                                   edits=edits or {}, tick=self.tick))
         self.audit("APPROVAL_EDITED" if edits else "APPROVAL_GRANTED", case.id, actor,
                    dict(edits=edits or {}, confidence=case.conf))
         res = self.execute_send(case, actor)
-        if res in ("held", "re-routed"):
-            case.status = "queued" if res == "held" else case.status
+        if res == "held":
+            case.status = "queued"
         self.feed_add("human", f"{actor} {'edited + approved' if edits else 'approved'} {case.id}", case.id)
 
     def reject(self, case: Case, reason: str, actor: str = "analyst") -> None:
@@ -1298,6 +1325,15 @@ class Engine:
             else:
                 self.breaker["probe_tick"] = self.tick + 5
                 self.feed_add("chaos", "Half-open probe failed — connector still down")
+        # dry-run resume: when dry-run is switched off, previously logged sends requeue
+        if not self.policy.dry_run:
+            resumed = 0
+            for c in self.cases.values():
+                if c.status == "dry_run":
+                    c.status = "queued"
+                    resumed += 1
+            if resumed:
+                self.feed_add("policy", f"Dry-run disabled — {resumed} logged sends re-queued for live execution")
         # payments / promises / disputes
         for case in list(self.cases.values()):
             if case.status in ("awaiting_payment", "promise") and case.agent_pay_tick == self.tick:
@@ -1464,7 +1500,7 @@ def run_self_tests(art: dict) -> list[dict]:
     check("Schema validator accepts good output", lambda: validate_schema(
         dict(channel="email", tone="firm", subject="s", body="b"), OUTREACH_SCHEMA)[0])
     led = AuditLedger.__new__(AuditLedger)
-    led.entries, led.prev, led.run_id, led.db_ok = [], "0" * 64, "test", False
+    led.entries, led.prev, led.run_id, led.db_ok, led._since_commit = [], "0" * 64, "test", False, 0
     for i in range(10):
         led.add("T", f"C{i}", "test", dict(i=i), i)
     check("Hash chain verifies", lambda: led.verify()[0])
@@ -1480,10 +1516,15 @@ def run_self_tests(art: dict) -> list[dict]:
             redact_pii(s); scan_injection(s)
         return True
     check("Parsers survive 50 hostile fuzz inputs", hostile)
-    check("SMS templates ≤ 160 chars", lambda: all(
-        len(t.format(contact="A", company="B", inv="INV-1", amt="$1,000", days=30,
-                     tenant=TENANT, token="x" * 8)) <= 175
-        for (ch, _), (_subj, t) in TEMPLATES.items() if ch == "sms"))
+
+    def sms_len() -> bool:
+        slots = dict(contact="A", company="B", inv="INV-1", amt="$1,000", days=30,
+                     tenant=TENANT, token="x" * 8)
+        return all(len(body.format(**slots)) <= 175
+                   for (ch, _), (_subj, body) in TEMPLATES.items() if ch == "sms")
+    check("SMS templates ≤ 160 chars (+slack)", sms_len)
+    check("All templates are (subject, body) tuples", lambda: all(
+        isinstance(v, tuple) and len(v) == 2 for v in TEMPLATES.values()))
     return results
 
 
@@ -1521,6 +1562,7 @@ def boot(seed: int) -> Engine:
                                            llm=LLM_VER, cases=len(eng.cases),
                                            autonomy="live (demo tenant consented)",
                                            note="new tenants default to dry-run"))
+    eng.ledger.flush()
     return eng
 
 
@@ -1656,12 +1698,12 @@ def render_command_body(eng: Engine) -> None:
             f'{s["open_n"]} cases · {s["disputes"]} disputes · cost/case ${s["cost_case"]:.4f}',
             "vio", [x["open"] for x in h]),
     ])
+    p = P()
+    xs = [x["tick"] for x in h]
     col1, col2 = st.columns([2, 1])
     with col1:
         sec("Cumulative cash — agentic vs rules baseline", "📈")
-        p = P()
         fig = go.Figure()
-        xs = [x["tick"] for x in h]
         fig.add_trace(go.Scatter(x=xs, y=[x["cash_a"] for x in h], name="Agentic",
                                  line=dict(color=p["grn"], width=3), fill="tozeroy",
                                  fillcolor=rgba(p["grn"], .12)))
@@ -1782,8 +1824,7 @@ def page_queue(eng: Engine) -> None:
         with v2:
             if st.button("Apply", key="q_view_apply") and chosen_view != view_names[0]:
                 v = next(v for v in st.session_state.saved_views if v["name"] == chosen_view)
-                for k, val in v["state"].items():
-                    st.session_state[k] = val
+                st.session_state["_apply_view"] = dict(v["state"])
                 st.rerun()
         with v3:
             if st.button("Save view", key="q_view_save"):
@@ -1876,11 +1917,12 @@ def page_queue(eng: Engine) -> None:
     pending_ids = [x.id for x in cases if x.status == "approval"]
     u1, u2 = st.columns([3, 1])
     with u1:
-        bulk = st.multiselect(f"Pending approvals in view ({len(pending_ids)})", pending_ids, key="q_bulk")
+        bulk = st.multiselect(f"Pending approvals in view ({len(pending_ids)})", pending_ids)
     with u2:
         if st.button("✅ Approve selected", key="q_bulk_go", disabled=not bulk):
             for cid in bulk:
-                eng.approve(eng.cases[cid])
+                if cid in eng.cases and eng.cases[cid].status == "approval":
+                    eng.approve(eng.cases[cid])
             st.toast(f"Approved {len(bulk)} cases", icon="✅"); st.rerun()
     if eng.undo_stack:
         u = eng.undo_stack[-1]
@@ -1916,7 +1958,7 @@ def page_queue(eng: Engine) -> None:
                             raise ValueError("out of bounds")
                         cust_id = names.get(str(row["customer"]).lower(), "C00")
                         note = str(row.get("note", "") or "")
-                        c = eng.make_case(forced=dict(customer=cust_id, amount=amt, note=note), overdue=od)
+                        eng.make_case(forced=dict(customer=cust_id, amount=amt, note=note), overdue=od)
                         ok_n += 1
                     except (ValueError, TypeError):
                         bad_n += 1
@@ -2035,24 +2077,30 @@ def render_replay_block(eng: Engine, case: Case) -> None:
     idx = min(idx, max(n - 1, 0))
     b1, b2, b3, b4, b5 = st.columns(5)
     with b1:
-        if st.button("⏮", key="rp_first"): st.session_state.replay_idx = 0; st.session_state.replay_play = False
+        if st.button("⏮", key="rp_first"):
+            st.session_state.replay_idx = 0; st.session_state.replay_play = False; st.rerun()
     with b2:
-        if st.button("◀ Step", key="rp_prev"): st.session_state.replay_idx = max(0, idx - 1); st.session_state.replay_play = False
+        if st.button("◀ Step", key="rp_prev"):
+            st.session_state.replay_idx = max(0, idx - 1); st.session_state.replay_play = False; st.rerun()
     with b3:
         if st.button("⏸ Pause" if playing else "▶ Play replay", key="rp_play", type="primary"):
             st.session_state.replay_play = not playing
             if not playing and idx >= n - 1:
                 st.session_state.replay_idx = 0
+            st.rerun()   # full rerun so the fragment schedule is rebuilt
     with b4:
-        if st.button("Step ▶", key="rp_next"): st.session_state.replay_idx = min(n - 1, idx + 1); st.session_state.replay_play = False
+        if st.button("Step ▶", key="rp_next"):
+            st.session_state.replay_idx = min(n - 1, idx + 1); st.session_state.replay_play = False; st.rerun()
     with b5:
-        if st.button("⏭", key="rp_last"): st.session_state.replay_idx = n - 1; st.session_state.replay_play = False
+        if st.button("⏭", key="rp_last"):
+            st.session_state.replay_idx = n - 1; st.session_state.replay_play = False; st.rerun()
     if playing:
         if idx < n - 1:
             st.session_state.replay_idx = idx + 1
             idx += 1
         else:
             st.session_state.replay_play = False
+            st.rerun()   # stop the auto-play schedule cleanly
     st.progress((idx + 1) / max(n, 1), text=f"Replay step {idx + 1} of {n}")
     trace_timeline(case, upto=idx)
     if n:
@@ -2125,8 +2173,11 @@ def page_detail(eng: Engine) -> None:
                 if st.button("💳 Credit memo", key="dt_cred"):
                     eng.resolve_dispute(c, force="credit"); st.rerun()
     sec("Decision replay — scrub or auto-play the agent graph")
-    rp = frag(lambda: render_replay_block(eng, c),
-              0.8 if st.session_state.get("replay_play", False) and _HAS_FRAG else None)
+
+    def _replay() -> None:
+        render_replay_block(eng, c)
+
+    rp = frag(_replay, 0.8 if st.session_state.get("replay_play", False) and _HAS_FRAG else None)
     rp()
     sec("Executed actions · idempotency keys · rollback handlers")
     if c.actions:
@@ -2334,7 +2385,7 @@ def page_policy(eng: Engine) -> None:
         auto_thr = st.slider("Auto-act threshold (low risk only)", 0.80, 0.99, float(pol.auto_thr), 0.01, key="pol_auto")
         notify_floor = st.slider("Human-approval floor (below → inbox)", 0.50, 0.90, float(pol.notify_floor), 0.01, key="pol_floor")
         high_amt = st.slider("High-risk amount ($)", 10000, 100000, int(pol.high_risk_amt), 1000, key="pol_high")
-        dry = st.toggle("Dry-run mode (no external effects)", value=pol.dry_run, key="pol_dry")
+        dry = st.toggle("Dry-run mode (no external effects)", value=pol.dry_run)
         sec("Negotiation & contact caps")
         inst = st.slider("Max installments", 2, 8, pol.max_installments, key="pol_inst")
         disc = st.slider("Early-settle discount cap (%)", 0.0, 5.0, float(pol.discount_cap_pct), 0.1, key="pol_disc")
@@ -2385,11 +2436,7 @@ def page_policy(eng: Engine) -> None:
                 st.rerun()
         with b2:
             if st.button("Reset to defaults", key="pol_reset"):
-                eng.policy = PolicyConfig()
-                eng.audit("POLICY_UPDATED", None, "admin", dict(reset=True))
-                for k in ["pol_auto", "pol_floor", "pol_high", "pol_dry", "pol_inst",
-                          "pol_disc", "pol_cap", "pol_credit", "pol_rate"]:
-                    st.session_state.pop(k, None)
+                st.session_state["_policy_reset"] = True
                 st.toast("Policy reset to conservative defaults", icon="📜")
                 st.rerun()
     sec("Policy change history")
@@ -2529,8 +2576,8 @@ def page_roi(eng: Engine) -> None:
         inv_mo = st.number_input("Invoices per month", 100, 200000, 1200, 50, key="roi_inv")
         avg_val = st.number_input("Average invoice value ($)", 50, 500000, 3800, 50, key="roi_val")
         cur_dso = st.number_input("Current DSO (days)", 10, 180, 52, key="roi_dso")
-        dso_red = st.slider("DSO reduction (days)", 0.0, 15.0,
-                            float(min(max(s["dso_r"] - s["dso_a"], 0), 15)) or 8.0, 0.5, key="roi_red")
+        default_red = round(min(max(s["dso_r"] - s["dso_a"], 0.0), 15.0) * 2) / 2 or 8.0
+        dso_red = st.slider("DSO reduction (days)", 0.0, 15.0, float(default_red), 0.5, key="roi_red")
     with c2:
         sec("Your costs")
         ftes = st.number_input("Collector FTEs", 1, 500, 6, key="roi_fte")
@@ -2693,6 +2740,7 @@ def page_audit(eng: Engine) -> None:
                            **_stretch(st.download_button))
     with e3:
         if st.button("🗑️ Prune runs past retention", key="au_prune"):
+            led.flush()
             n = 0
             if led.db_ok:
                 try:
@@ -2735,7 +2783,7 @@ def page_audit(eng: Engine) -> None:
             "Mock LLM is deterministic behind the real gateway contract (schema, cache, fallback, tokens, latency).",
             "Thresholds tuned on the validation split only; the test split is never used for tuning.",
             "Hash chain is per-run; retention prunes whole old runs so chains stay verifiable.",
-            "SQLite mirrors the audit log for durability; the demo degrades to memory-only if the file is unwritable.",
+            "SQLite mirrors the audit log (batched commits, flushed on export); degrades to memory-only if unwritable.",
             "No audio: an operations console should be silent; every signal is visual and auditable.",
             "HTML tables render in the artifact's own palette so dark/light themes stay consistent.",
         ]:
@@ -2796,15 +2844,26 @@ stroke="url(#lg)" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>
                 eng.feed_add("block" if eng.kill else "ok",
                              "GLOBAL KILL SWITCH ENGAGED — all autonomous actions held" if eng.kill
                              else "Kill switch released — resuming gated autonomy")
+                if not eng.kill:   # re-route decisions that were held
+                    for c in eng.cases.values():
+                        if c.route == "held":
+                            c.route = route_decision(c.conf, c.risk, eng.policy, False)
+                            c.status = "approval" if c.route == "approval" else "queued"
                 st.rerun()
-        eng.policy.dry_run = st.toggle("🧪 Dry-run (no external effects)", value=eng.policy.dry_run, key="ctl_dry")
-        new_outage = st.toggle("🔌 ERP/email connector down", value=eng.outage, key="ctl_outage")
-        if new_outage != eng.outage:
-            eng.outage = new_outage
+        # Unkeyed toggles: engine is the single source of truth, so scenario-lab
+        # buttons and the Policy Studio stay in sync with the sidebar.
+        dry_val = st.toggle("🧪 Dry-run (no external effects)", value=eng.policy.dry_run)
+        if dry_val != eng.policy.dry_run:
+            eng.policy.dry_run = dry_val
+            eng.audit("POLICY_UPDATED", None, "admin", dict(dry_run=dry_val))
+            eng.feed_add("policy", f"Dry-run {'enabled — no external effects' if dry_val else 'disabled — live autonomy resumed'}")
+        outage_val = st.toggle("🔌 ERP/email connector down", value=eng.outage)
+        if outage_val != eng.outage:
+            eng.outage = outage_val
             if not eng.outage:
                 eng.breaker = {"state": "closed", "fails": 0, "probe_tick": 0}
             eng.audit("OUTAGE_TOGGLED", None, "admin", dict(down=eng.outage))
-            eng.feed_add("chaos", f"Connector {'DOWN — chaos scenario' if eng.outage else 'RESTORED'}")
+            eng.feed_add("chaos", f"Connector {'DOWN — chaos scenario' if eng.outage else 'RESTORED — draining backlog'}")
         i1, i2 = st.columns(2)
         with i1:
             if st.button("🧾 Inject dispute", key="ctl_disp"):
@@ -2846,7 +2905,22 @@ def main() -> None:
     st.set_page_config(page_title=APP_TITLE, page_icon="💠", layout="wide",
                        initial_sidebar_state="expanded")
     inject_theme()
+    # Consume pending navigation BEFORE any widget is instantiated (fragment-safe).
+    if "_nav_to" in st.session_state:
+        st.session_state["nav"] = st.session_state.pop("_nav_to")
+    if "_case_to" in st.session_state:
+        st.session_state["selected_case"] = st.session_state.pop("_case_to")
     eng = get_engine()
+    if "_apply_view" in st.session_state:
+        for k, v in st.session_state.pop("_apply_view").items():
+            st.session_state[k] = v
+    if st.session_state.pop("_policy_reset", False):
+        eng.policy = PolicyConfig()
+        for k in ["pol_auto", "pol_floor", "pol_high", "pol_inst", "pol_disc",
+                  "pol_cap", "pol_credit", "pol_rate"]:
+            st.session_state.pop(k, None)
+        eng.audit("POLICY_UPDATED", None, "admin", dict(reset=True))
+        eng.feed_add("policy", "Policy reset to conservative defaults")
     nav = sidebar(eng)
     fails = [t for t in st.session_state.get("selftests", []) if not t["ok"]]
     if fails:
